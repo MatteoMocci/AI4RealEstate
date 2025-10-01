@@ -1,0 +1,15 @@
+column,first_value,second_value,first_count,second_count,missing,missing_rate,missing_over_50pct
+Accesso per disabili,0,1,854,299,0,0.0,False
+Ascensore,0,1,592,561,0,0.0,False
+Balcone,1,0,670,483,0,0.0,False
+Caminetto,0,1,1080,73,0,0.0,False
+Cantina,0,1,997,156,0,0.0,False
+Disponibilità,Libero,Non Libero,691,462,0,0.0,False
+Fibra Ottica,0,1,861,292,0,0.0,False
+Giardino Comune,0,1,1035,118,0,0.0,False
+Giardino Privato,0,1,983,170,0,0.0,False
+Prestazione energetica estiva?,0,1,1097,56,0,0.0,False
+Prestazione energetica invernale?,0,1,1096,57,0,0.0,False
+Proprietà,Intera proprietà,Nuda proprietà,696,18,439,0.3807,False
+Terrazza,0,1,850,303,0,0.0,False
+Tipologia riscaldamento,Autonomo,Centralizzato,660,111,382,0.3313,False

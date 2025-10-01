@@ -1,0 +1,12 @@
+column,n_values,values,counts,missing,missing_rate,missing_over_50pct
+Alimentazione riscaldamento,9,alimentato a pompa di calore | alimentazione elettrica | alimentato a gas | alimentato a gasolio | alimentato a fotovoltaico | alimentato a metano | alimentato a gpl | alimentato a solare | alimentato a pellet,151 | 114 | 73 | 57 | 16 | 11 | 7 | 7 | 5,712,0.6175,True
+Classe Immobile,4,Classe immobile media | Classe immobile signorile | Classe immobile economica | Immobile di lusso,380 | 311 | 57 | 42,363,0.3148,False
+Classe energetica,12,G | F | D | C | A4 | E | B | A | A+ | A1 | A3 | A2,298 | 100 | 65 | 62 | 54 | 53 | 31 | 25 | 22 | 18 | 17 | 10,398,0.3452,False
+Esposizione,7,doppia | esterna | interna | nord | est | sud | ovest,243 | 214 | 32 | 18 | 14 | 13 | 5,614,0.5325,True
+Fonte riscaldamento,5,ad aria | a radiatori | a pavimento | a stufa | alimentazione elettrica,328 | 168 | 10 | 9 | 7,631,0.5473,True
+Materiale infissi,3,legno | PVC | metallo,283 | 172 | 67,631,0.5473,True
+Piano,12,1.0 | 2.0 | 0.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | -1.0 | 8.0 | 10.0 | 9.0,235 | 195 | 192 | 116 | 97 | 61 | 27 | 12 | 8 | 6 | 2 | 2,200,0.1735,False
+Posti Auto,4,0 | 1 | 2 | 3+,756 | 246 | 121 | 30,0,0.0,False
+Stato di conservazione,4,Buono / Abitabile | Ottimo / Ristrutturato | Da ristrutturare | Nuovo / In costruzione,443 | 276 | 159 | 154,121,0.1049,False
+Tipologia,15,Appartamento | Attico | Villa unifamiliare | Terratetto unifamiliare | Palazzo - Edificio | Villa bifamiliare | Villa a schiera | Loft | Mansarda | Progetto | Terratetto plurifamiliare | Open space | Palazzo - Stabile | Villetta a schiera | Appartamento in villa,962 | 41 | 38 | 34 | 23 | 18 | 10 | 6 | 4 | 3 | 3 | 3 | 3 | 3 | 2,0,0.0,False
+Tipologia di infissi,3,doppio vetro | vetro | triplo vetro,262 | 236 | 24,631,0.5473,True
