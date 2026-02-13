@@ -19,6 +19,12 @@ except ImportError:
     TABNET_AVAILABLE = False
 
 try:
+    from lightgbm import LGBMRegressor
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
+
+try:
     import shap
     import matplotlib
     matplotlib.use("Agg")
@@ -80,8 +86,14 @@ cat_cols = [
 ]
 num_cols = ["Superficie", "Anno di costruzione", "Piano", "Efficienza energetica"]
 
+df["Prezzo"] = pd.to_numeric(df["Prezzo"], errors="coerce")
+df["Superficie"] = pd.to_numeric(df["Superficie"], errors="coerce")
+df = df[df["Superficie"] > 0].copy()
+
+df["Prezzo_per_mq"] = df["Prezzo"] / df["Superficie"]
+
 X = df.drop("Prezzo", axis=1)
-y = df["Prezzo"].values
+y = df["Prezzo_per_mq"].values
 
 cat_imputer = SimpleImputer(strategy="constant", fill_value="__MISSING__")
 ohe = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
@@ -140,63 +152,6 @@ def slugify(value):
     slug = "".join(cleaned).strip("_")
     return slug or "model"
 
-
-
-
-def append_indicator_feature_names(feature_names, cols, transformer):
-    indicator = getattr(transformer, "indicator_", None)
-    if indicator is None or not getattr(transformer, "add_indicator", False):
-        return
-    features = getattr(indicator, "features_", None)
-    if features is None:
-        return
-    for idx in features:
-        if isinstance(cols, (list, tuple)) and idx < len(cols):
-            base = cols[idx]
-        else:
-            base = f"feature_{idx}"
-        feature_names.append(f"{base}__missing_indicator")
-
-
-def get_pipeline_feature_names(pipeline):
-    preprocessor = pipeline.named_steps.get("pre") if hasattr(pipeline, "named_steps") else None
-    if preprocessor is None:
-        return None
-    try:
-        names = preprocessor.get_feature_names_out()
-        return list(names)
-    except Exception:
-        pass
-    feature_names = []
-    transformers = getattr(preprocessor, "transformers_", [])
-    for name, transformer, cols in transformers:
-        if transformer in ("drop", None):
-            continue
-        if transformer == "passthrough":
-            feature_names.extend(list(cols))
-            continue
-        fitted_transformer = transformer
-        if hasattr(fitted_transformer, "steps"):
-            fitted_transformer = fitted_transformer.steps[-1][1]
-        names_added = False
-        if hasattr(fitted_transformer, "get_feature_names_out"):
-            try:
-                names = fitted_transformer.get_feature_names_out(cols)
-            except TypeError:
-                names = fitted_transformer.get_feature_names_out()
-            feature_names.extend(list(names))
-            names_added = True
-        if not names_added:
-            feature_names.extend(list(cols))
-        append_indicator_feature_names(feature_names, cols, fitted_transformer)
-        if hasattr(transformer, "steps"):
-            for _, step_transformer in transformer.steps:
-                append_indicator_feature_names(feature_names, cols, step_transformer)
-    return feature_names or None
-
-
-
-
 def ensure_feature_names_length(feature_names, target_len):
     names = list(feature_names or [])
     if len(names) < target_len:
@@ -206,47 +161,181 @@ def ensure_feature_names_length(feature_names, target_len):
     return names
 
 
+def append_indicator_feature_names(feature_names, cols, transformer, prefix):
+    """
+    If a transformer added missing-value indicators, append names using the original
+    column names, always as '{prefix}__{col}__missing_indicator'.
+    """
+    indicator = getattr(transformer, "indicator_", None)
+    if indicator is None or not getattr(transformer, "add_indicator", False):
+        return
+    features = getattr(indicator, "features_", None)
+    if features is None:
+        return
+    # cols can be a list of column names or indices. Normalize to names.
+    if isinstance(cols, (list, tuple)):
+        col_list = list(cols)
+    else:
+        col_list = [cols]
+    for idx in features:
+        if 0 <= idx < len(col_list):
+            base = col_list[idx]
+        else:
+            base = f"unknown_col_{idx}"
+        feature_names.append(f"{prefix}__{base}__missing_indicator")
+
+
+def _ohe_names_with_prefix(ohe, input_cols, prefix):
+    """
+    Robustly get one hot names and force a stable '{prefix}__{col}_{category}'
+    format even when OHE returns 'x0_' style names.
+    """
+    try:
+        raw = list(ohe.get_feature_names_out(input_cols))
+    except TypeError:
+        # older sklearn
+        raw = list(ohe.get_feature_names_out())
+    names = []
+    # Build mapping index->col for 'x0_' style
+    idx_to_col = {i: c for i, c in enumerate(input_cols)}
+    for j, n in enumerate(raw):
+        # Cases:
+        # 1) 'Tipologia_appartamento'
+        # 2) 'x0_appartamento'
+        # 3) 'Tipologia' if drop/handle_unknown interplay
+        if n.startswith("x") and "_" in n and n[1:n.find("_")].isdigit():
+            xi = int(n[1:n.find("_")])
+            col = idx_to_col.get(xi, input_cols[0] if input_cols else f"col{xi}")
+            cat = n[n.find("_")+1:].replace(" ", "_")
+            names.append(f"{prefix}__{col}_{cat}")
+        elif "_" in n:
+            col = n[:n.find("_")]
+            cat = n[n.find("_")+1:].replace(" ", "_")
+            names.append(f"{prefix}__{col}_{cat}")
+        else:
+            # No category suffix returned. Keep as column name.
+            names.append(f"{prefix}__{n}")
+    return names
+
+
+def get_pipeline_feature_names(pipeline):
+    """
+    Always return names with stable prefixes:
+      - categorical: 'cat__{original_col}_{category}'
+      - numeric:     'num__{original_col}' plus optional '__missing_indicator'
+    Falls back gracefully if get_feature_names_out is not available.
+    """
+    preprocessor = pipeline.named_steps.get("pre") if hasattr(pipeline, "named_steps") else None
+    if preprocessor is None:
+        return None
+
+    # Try the modern path first
+    try:
+        names = list(preprocessor.get_feature_names_out())
+        if names:
+            return names
+    except Exception:
+        pass
+
+    # Manual reconstruction
+    feature_names = []
+    transformers = getattr(preprocessor, "transformers_", [])
+    for name, transformer, cols in transformers:
+        if transformer in ("drop", None):
+            continue
+
+        # Normalize cols to list of original column names
+        if isinstance(cols, (list, tuple, np.ndarray, pd.Index)):
+            input_cols = list(cols)
+        else:
+            input_cols = [cols]
+
+        # Pipeline inside ColumnTransformer
+        steps = None
+        fitted_transformer = transformer
+        if hasattr(fitted_transformer, "steps"):
+            steps = fitted_transformer.steps
+            fitted_transformer = steps[-1][1]
+
+        if fitted_transformer == "passthrough":
+            # Preserve original column names with the section prefix
+            prefix = f"{name}"
+            for c in input_cols:
+                feature_names.append(f"{prefix}__{c}")
+        elif hasattr(fitted_transformer, "get_feature_names_out") and isinstance(fitted_transformer, OneHotEncoder):
+            # OneHotEncoder: force stable prefixed names
+            ohe_names = _ohe_names_with_prefix(fitted_transformer, input_cols, name)
+            feature_names.extend(ohe_names)
+        elif hasattr(fitted_transformer, "get_feature_names_out"):
+            # Other transformers that expose names, prefix them with the section name
+            try:
+                out = list(fitted_transformer.get_feature_names_out(input_cols))
+            except TypeError:
+                out = list(fitted_transformer.get_feature_names_out())
+            for n in out:
+                # Avoid double prefixing if already prefixed
+                feature_names.append(n if n.startswith(f"{name}__") else f"{name}__{n}")
+        else:
+            # Fallback: keep original columns with section prefix
+            for c in input_cols:
+                feature_names.append(f"{name}__{c}")
+
+        # Append any missing indicators from the fitted components
+        prefix = name
+        # indicator on the last step
+        append_indicator_feature_names(feature_names, input_cols, fitted_transformer, prefix)
+        # indicator possibly attached to earlier steps in the pipeline
+        if steps is not None:
+            for _, step_transformer in steps:
+                append_indicator_feature_names(feature_names, input_cols, step_transformer, prefix)
+
+    return feature_names or None
+
+
 def base_feature_label(feature_name):
+    """
+    Collapse one hot levels and indicators to the base original column name.
+    Works with the enforced '{sect}__{col}' naming.
+    """
     name = feature_name
     if name.endswith("__missing_indicator"):
         name = name[: -len("__missing_indicator")]
-    if name.startswith("cat__"):
-        for col in cat_cols:
-            if name.startswith(f"cat__{col}"):
-                return col
-    if name.startswith("num__"):
-        for col in num_cols:
-            if name.startswith(f"num__{col}"):
-                return col
+    # Remove section prefix 'cat__' or 'num__'
     if "__" in name:
-        return name.split("__")[-1]
+        parts = name.split("__", 2)
+        if len(parts) >= 2:
+            name = parts[1]
+    # For one hot like '{col}_{category}', strip category
+    if "_" in name and name.split("_", 1)[0] in set(cat_cols):
+        return name.split("_", 1)[0]
     return name
 
 
 def friendly_feature_label(feature_name):
+    """
+    Human friendly for plots:
+      - 'cat__Col_cat' -> 'Col = cat'
+      - 'num__Col'     -> 'Col'
+      - indicators     -> 'Col (missing indicator)'
+    """
     if feature_name.endswith("__missing_indicator"):
         base = friendly_feature_label(feature_name[: -len("__missing_indicator")])
         return f"{base} (missing indicator)"
-    if feature_name.startswith("cat__"):
-        for col in cat_cols:
-            prefix = f"cat__{col}_"
-            if feature_name.startswith(prefix):
-                category = feature_name[len(prefix):].replace('_', ' ')
-                return f"{col} = {category}"
-            if feature_name == f"cat__{col}":
-                return col
-    if feature_name.startswith("num__"):
-        for col in num_cols:
-            prefix = f"num__{col}"
-            if feature_name.startswith(prefix):
-                suffix = feature_name[len(prefix):]
-                if suffix.startswith('_'):
-                    suffix = suffix[1:].replace('_', ' ')
-                    if suffix:
-                        return f"{col} ({suffix})"
-                return col
-    return feature_name
 
+    # Expect '{sect}__{payload}'
+    if "__" in feature_name:
+        sect, payload = feature_name.split("__", 1)
+        if sect == "cat":
+            # payload can be '{col}_{category}' or just '{col}'
+            if "_" in payload:
+                col, cat = payload.split("_", 1)
+                return f"{col} = {cat.replace('_', ' ')}"
+            return payload
+        if sect == "num":
+            return payload
+
+    # Fallback unchanged
+    return feature_name
 
 
 def generate_shap_summary(pipeline, feature_names, X, model_name):
@@ -466,6 +555,25 @@ model_configs = [
     },
 ]
 
+if LIGHTGBM_AVAILABLE:
+    model_configs.append(
+        {
+            "name": "LightGBM",
+            "estimator": build_pipeline(
+                LGBMRegressor(
+                    random_state=42,
+                    n_estimators=300,
+                    learning_rate=0.05,
+                    subsample=0.9,
+                    colsample_bytree=0.9,
+                    n_jobs=-1,
+                )
+            ),
+            "search": None,
+            "cv_n_jobs": -1,
+        }
+    )
+
 if TABNET_AVAILABLE:
     model_configs.append(
         {
@@ -640,6 +748,9 @@ if SHAP_AVAILABLE:
         print("SHAP available but no SHAP summaries were generated.")
 else:
     print("SHAP not available: install shap and matplotlib to generate SHAP plots.")
+
+if not LIGHTGBM_AVAILABLE:
+    print("LightGBM not available: install lightgbm to include it in the comparison.")
 
 if not TABNET_AVAILABLE:
     print("TabNet not available: install pytorch-tabnet to include it in the comparison.")
